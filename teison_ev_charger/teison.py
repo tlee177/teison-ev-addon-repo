@@ -108,7 +108,7 @@ def post_login(user_name, pass_word, local_app_option):
     )
     return login_res.json()
 def get_device_list(local_token, local_app_option):
-    headers = {'token': local_token}
+    headers = {'User-Agent': 'PostmanRuntime/7.53.0','token': local_token}
     device_res = requests.get(
         f'{get_base_url(local_app_option)}cpAm2/cp/deviceList',
         headers=headers

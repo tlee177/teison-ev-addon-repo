@@ -171,7 +171,7 @@ def login_and_get_device():
     device_list = device_list['deviceList']
     if len(device_list) > device_index:
         device_id = device_list[device_index]['id']
-        debug_print(f"TJL2 Using device ID: {device_id}")
+        debug_print(f"TJL3 Using device ID: {device_id}")
 
 def post_sensor(sensor_id, state, attributes):
     try:
@@ -341,6 +341,7 @@ def on_connect(client, userdata, flags, rc, properties):
 def on_message(client, userdata, msg):
 
     payload = msg.payload.decode()
+    print(f"TJL4 {payload}")
     debug_print(f"on_message - {payload}")
     if token and device_id:
         if msg.topic == "teison/charger/current/set":

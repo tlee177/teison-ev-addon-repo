@@ -129,7 +129,7 @@ def get_cp_config(local_token,local_app_option, local_device_id):
     )
     return res.json()
 def set_cp_config(local_token,local_app_option, local_device_id,key,value):
-    headers = {'token': local_token}
+    headers = {'User-Agent': 'PostmanRuntime/7.53.0','token': local_token}
     payload = {
         "key": key,
         "value": value,
@@ -140,68 +140,23 @@ def set_cp_config(local_token,local_app_option, local_device_id,key,value):
         headers=headers
     )
     return res.json()
-def get_rates(local_token, local_app_option, retries=3, retry_delay=2):
-    headers = {'token': local_token}
-    url = f'{get_base_url(local_app_option)}cpAm2/users/getRates'
-    for attempt in range(1, retries + 1):
-        try:
-            res = requests.get(url, headers=headers, timeout=10)
-            res.raise_for_status()
-            return res.json()
-        except (SSLError, RequestException) as err:
-            debug_print(f"Error fetching rates (attempt {attempt}/{retries}): {err}")
-            if attempt < retries:
-                time.sleep(retry_delay)
-            else:
-                debug_print("Falling back to empty rates due to repeated failures")
-                return {"bizData": {"rates": None, "currency": None}}
-def set_rates(local_token,local_app_option,rates=None, currency=None):
-    headers = {'token': local_token}
-    if rates is not None and currency is not None:
-        payload = {
-            "rates": rates,
-            "currency": currency
-        }
-    elif rates is not None:
-        payload = {
-            "rates": rates
-        }
-    elif currency is not None:
-        payload = {
-            "currency": currency
-        }
-    else:
-        payload = {}
-    res = requests.post(
-        f'{get_base_url(local_app_option)}cpAm2/users/setRates',
-        json=payload,
-        headers=headers
-    )
-    return res.json()
+
+
 def get_charge_record_list(local_token,local_app_option, local_device_id,from_date, to_date):
-    headers = {'token': local_token}
+    headers = {'User-Agent': 'PostmanRuntime/7.53.0','token': local_token}
     charge_record_list_res = requests.get(
         f'{get_base_url(local_app_option)}cpAm2/tran/chargeRecordList/{local_device_id}?from={from_date}&to={to_date}',
         headers=headers
     )
     return charge_record_list_res.json()
 def start_charge(local_token, local_app_option, local_device_id):
-    headers = {'token': local_token}
+    headers = {'User-Agent': 'PostmanRuntime/7.53.0','token': local_token}
     r = requests.post(f'{get_base_url(local_app_option)}cpAm2/cp/startCharge/{local_device_id}', headers=headers)
     return r.json()
 def stop_charge(local_token, local_app_option, local_device_id):
-    headers = {'token': local_token}
+    headers = {'User-Agent': 'PostmanRuntime/7.53.0','token': local_token}
     r = requests.get(f'{get_base_url(local_app_option)}cpAm2/cp/stopCharge/{local_device_id}', headers=headers)
     return r.json()
-def export_excel(local_token, local_app_option, local_device_id, from_date, to_date):
-    headers = {'token': local_token}
-    r = requests.get(f'{get_base_url(local_app_option)}cpAm2/tran/exportExcel/{local_device_id}?from={from_date}&to={to_date}', headers=headers)
-    if r.status_code == 200:
-        return Response(
-            r.content
-        )
-    else:
-        return {"error": "Failed to fetch file"}, 500
 
 def login_and_get_device():
     global token, device_id

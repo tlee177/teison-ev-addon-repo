@@ -216,7 +216,7 @@ def login_and_get_device():
     device_list = device_list['deviceList']
     if len(device_list) > device_index:
         device_id = device_list[device_index]['id']
-        debug_print(f"Using device ID: {device_id}")
+        debug_print(f"TJL Using device ID: {device_id}")
 
 def post_sensor(sensor_id, state, attributes):
     try:

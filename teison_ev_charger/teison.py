@@ -285,14 +285,17 @@ def post_sensor(sensor_id, state, attributes):
     try:
         # 1. Dynamically get the token every time to ensure it's never empty
         # In HA Add-ons, the SUPERVISOR_TOKEN is the only one that works with the 'supervisor' URL
-        token = config.get('access_token')
+        token = os.environ.get("SUPERVISOR_TOKEN") or config.get('access_token')
 
         if not token:
             debug_print(f"❌ Error: No token found for {sensor_id}")
             return
 
         # 2. Match the URL to the token type
-        url = f"{HA_BASE_URL}sensor.{sensor_id}"
+        if os.environ.get("SUPERVISOR_TOKEN"):
+            url = f"http://supervisor/core/api/states/sensor.{sensor_id}"
+        else:
+            url = f"{HA_BASE_URL}sensor.{sensor_id}"
 
         # 3. Construct headers on-the-fly
         headers = {

@@ -11,8 +11,6 @@ from base64 import b64encode
 from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_v1_5
 from requests.exceptions import RequestException, SSLError
-# Config
-HA_BASE_URL = "http://homeassistant.local:8123/api/states/"
 
 
 # Public key for password encryption
@@ -102,6 +100,15 @@ if os.path.exists(config_path):
 else:
     debug_print(f"File not found: {config_path}")
 
+
+# Updated for Home Assistant Add-on Environment
+if is_hassio():
+    HA_BASE_URL = "http://supervisor/core/api/states/"
+    # The supervisor provides this token automatically to the container
+    HA_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
+else:
+    HA_BASE_URL = "http://homeassistant.local:8123/api/states/"
+    HA_TOKEN = config.get('access_token')
 
 HEADERS = {
     "Authorization": f"Bearer {HA_TOKEN}",
@@ -288,7 +295,7 @@ def post_sensor(sensor_id, state, attributes):
         if response.status_code == 200:
             debug_print(f"✅ Updated {sensor_id}: {response.status_code}")
         else:
-            debug_print(f"❌ Failed {sensor_id}: {response.status_code} - {response.text}")
+            debug_print(f"❌ Failed {HA_BASE_URL}: {sensor_id}: {response.status_code} - {response.text}")
 
     except Exception as e:
         debug_print(f"Error updating {sensor_id}: {e}")

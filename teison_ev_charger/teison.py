@@ -273,6 +273,7 @@ def login_and_get_device():
         token = None
         device_id = None
 
+
 def post_sensor(sensor_id, state, attributes):
     try:
         url = f"{HA_BASE_URL}sensor.{sensor_id}"
@@ -280,9 +281,15 @@ def post_sensor(sensor_id, state, attributes):
             "state": state,
             "attributes": attributes
         }
-        headers = get_teison_headers()
-        response = requests.post(url, headers=headers, data=json.dumps(payload))
-        debug_print(f"Updated {sensor_id}: {response.status_code} - {response.text}")
+
+        # Use the global HEADERS that contains your Long-Lived Access Token
+        response = requests.post(url, headers=HEADERS, data=json.dumps(payload))
+
+        if response.status_code == 200:
+            debug_print(f"✅ Updated {sensor_id}: {response.status_code}")
+        else:
+            debug_print(f"❌ Failed {sensor_id}: {response.status_code} - {response.text}")
+
     except Exception as e:
         debug_print(f"Error updating {sensor_id}: {e}")
 

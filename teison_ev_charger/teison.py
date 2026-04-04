@@ -541,8 +541,13 @@ client.on_connect = on_connect
 client.on_message = on_message
 client.connect(mqtt_host, mqtt_port, 60)
 
-threading.Thread(target=client.loop_forever, daemon=True).start()
-threading.Thread(target=mqtt_publish_status, daemon=True).start()
+# 1. Start the MQTT background networking engine
+# This replaces: threading.Thread(target=client.loop_forever...).start()
+client.loop_start()
+
+# 2. Start your status polling loop in a background thread
+status_thread = threading.Thread(target=mqtt_publish_status, daemon=True)
+status_thread.start()
 
 # Publish discovery config
 client.publish(

@@ -283,22 +283,41 @@ def login_and_get_device():
 
 def post_sensor(sensor_id, state, attributes):
     try:
-        url = f"{HA_BASE_URL}sensor.{sensor_id}"
+        # 1. Dynamically get the token every time to ensure it's never empty
+        # In HA Add-ons, the SUPERVISOR_TOKEN is the only one that works with the 'supervisor' URL
+        token = os.environ.get("SUPERVISOR_TOKEN") or config.get('access_token')
+
+        if not token:
+            debug_print(f"❌ Error: No token found for {sensor_id}")
+            return
+
+        # 2. Match the URL to the token type
+        if os.environ.get("SUPERVISOR_TOKEN"):
+            url = f"http://supervisor/core/api/states/sensor.{sensor_id}"
+        else:
+            url = f"{HA_BASE_URL}sensor.{sensor_id}"
+
+        # 3. Construct headers on-the-fly
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+
         payload = {
             "state": state,
             "attributes": attributes
         }
 
-        # Use the global HEADERS that contains your Long-Lived Access Token
-        response = requests.post(url, headers=HEADERS, data=json.dumps(payload))
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
 
         if response.status_code == 200:
-            debug_print(f"✅ Updated {sensor_id}: {response.status_code}")
+            debug_print(f"✅ Updated {sensor_id}")
         else:
-            debug_print(f"❌ Failed {HA_BASE_URL}: {sensor_id}: {response.status_code} - {response.text}")
+            # This will show us EXACTLY what the supervisor is complaining about
+            debug_print(f"❌ {sensor_id} Error: {response.status_code} - {response.text}")
 
     except Exception as e:
-        debug_print(f"Error updating {sensor_id}: {e}")
+        debug_print(f"💥 Critical Error updating {sensor_id}: {e}")
 
 
 def mqtt_publish_status():

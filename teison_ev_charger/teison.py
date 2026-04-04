@@ -31,6 +31,23 @@ def encrypt_password(password):
     encrypted = cipher.encrypt(password.encode('utf-8'))
     return b64encode(encrypted).decode('utf-8')
 
+
+# --- Header Helper (The 403 Fix) ---
+def get_teison_headers(local_token=None):
+    """Returns headers mimicking a real browser to bypass 403 blocks."""
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Origin': 'https://cloud.teison.com',
+        'Referer': 'https://cloud.teison.com/'
+    }
+    if local_token:
+        headers['token'] = local_token
+    return headers
+
+
+# --- Load Options ---
 config_path = './data/options.json'
 try:
     with open(config_path) as f:
@@ -92,56 +109,53 @@ HEADERS = {
 }
 DEFAULT_EMPTY_RATES = {"bizData": {"rates": None, "currency": None}}
 def post_login_teison_me(user_name, pass_word, app_option):
+    headers = get_teison_headers()
     payload = {'language': 'en_US',
                'username': user_name,
                'password': pass_word}
     login_res = requests.post(
         f'{get_base_url(app_option)}cpAm2/login',
-        data=payload
+        data=payload,
+        headers=headers
     )
     return login_res.json()
 def post_login(user_name, pass_word, local_app_option):
+    headers = get_teison_headers()
     encrypted_password = encrypt_password(pass_word)
     login_res = requests.post(
         f'{get_base_url(local_app_option)}api/v1/login/login',
-        json={"username": user_name, "password": encrypted_password}
+        json={"username": user_name, "password": encrypted_password},
+        headers=headers
     )
     return login_res.json()
 def get_device_list(local_token, local_app_option):
-    headers = {'token': local_token}
-    device_res = requests.get(
-        f'{get_base_url(local_app_option)}cpAm2/cp/deviceList',
-        headers=headers
-    )
+    headers = get_teison_headers(local_token)
+    device_res = requests.get(f'{get_base_url(local_app_option)}cpAm2/cp/deviceList', headers=headers)
     return device_res.json()
+
+
 def get_device_details(local_token, local_app_option, local_device_id):
-    headers = {'token': local_token}
-    res = requests.get(
-        f'{get_base_url(local_app_option)}cpAm2/cp/deviceDetail/{local_device_id}',
-        headers=headers
-    )
+    headers = get_teison_headers(local_token)
+    res = requests.get(f'{get_base_url(local_app_option)}cpAm2/cp/deviceDetail/{local_device_id}', headers=headers)
     return res.json()
-def get_cp_config(local_token,local_app_option, local_device_id):
-    headers = {'token': local_token}
-    res = requests.get(
-        f'{get_base_url(local_app_option)}cpAm2/cp/getCpConfig/{local_device_id}',
-        headers=headers
-    )
+
+
+def get_cp_config(local_token, local_app_option, local_device_id):
+    headers = get_teison_headers(local_token)
+    res = requests.get(f'{get_base_url(local_app_option)}cpAm2/cp/getCpConfig/{local_device_id}', headers=headers)
     return res.json()
-def set_cp_config(local_token,local_app_option, local_device_id,key,value):
-    headers = {'token': local_token}
-    payload = {
-        "key": key,
-        "value": value,
-    }
-    res = requests.post(
-        f'{get_base_url(local_app_option)}cpAm2/cp/changeCpConfig/{local_device_id}',
-        json=payload,
-        headers=headers
-    )
+
+
+def set_cp_config(local_token, local_app_option, local_device_id, key, value):
+    headers = get_teison_headers(local_token)
+    payload = {"key": key, "value": value}
+    res = requests.post(f'{get_base_url(local_app_option)}cpAm2/cp/changeCpConfig/{local_device_id}', json=payload,
+                        headers=headers)
     return res.json()
+
+
 def get_rates(local_token, local_app_option, retries=3, retry_delay=2):
-    headers = {'token': local_token}
+    headers = get_teison_headers(local_token)
     url = f'{get_base_url(local_app_option)}cpAm2/users/getRates'
     for attempt in range(1, retries + 1):
         try:
@@ -156,7 +170,7 @@ def get_rates(local_token, local_app_option, retries=3, retry_delay=2):
                 debug_print("Falling back to empty rates due to repeated failures")
                 return {"bizData": {"rates": None, "currency": None}}
 def set_rates(local_token,local_app_option,rates=None, currency=None):
-    headers = {'token': local_token}
+    headers = get_teison_headers()
     if rates is not None and currency is not None:
         payload = {
             "rates": rates,
@@ -179,22 +193,22 @@ def set_rates(local_token,local_app_option,rates=None, currency=None):
     )
     return res.json()
 def get_charge_record_list(local_token,local_app_option, local_device_id,from_date, to_date):
-    headers = {'token': local_token}
+    headers = get_teison_headers()
     charge_record_list_res = requests.get(
         f'{get_base_url(local_app_option)}cpAm2/tran/chargeRecordList/{local_device_id}?from={from_date}&to={to_date}',
         headers=headers
     )
     return charge_record_list_res.json()
 def start_charge(local_token, local_app_option, local_device_id):
-    headers = {'token': local_token}
+    headers = get_teison_headers(local_token)
     r = requests.post(f'{get_base_url(local_app_option)}cpAm2/cp/startCharge/{local_device_id}', headers=headers)
     return r.json()
 def stop_charge(local_token, local_app_option, local_device_id):
-    headers = {'token': local_token}
+    headers = get_teison_headers(local_token)
     r = requests.get(f'{get_base_url(local_app_option)}cpAm2/cp/stopCharge/{local_device_id}', headers=headers)
     return r.json()
 def export_excel(local_token, local_app_option, local_device_id, from_date, to_date):
-    headers = {'token': local_token}
+    headers = get_teison_headers()
     r = requests.get(f'{get_base_url(local_app_option)}cpAm2/tran/exportExcel/{local_device_id}?from={from_date}&to={to_date}', headers=headers)
     if r.status_code == 200:
         return Response(
@@ -212,8 +226,12 @@ def login_and_get_device():
         login_data = post_login_teison_me(username, password, app_option)
         token = login_data['token']
 
-    device_list = get_device_list(token,app_option).get('bizData', [])
-    device_list = device_list['deviceList']
+    device_list_data = get_device_list(token, app_option).get('bizData', {})
+    if not device_list_data or 'deviceList' not in device_list_data:
+        debug_print("Device list failed - retrying in 30s...")
+        time.sleep(30)
+        return
+    device_list = device_list_data['deviceList']
     if len(device_list) > device_index:
         device_id = device_list[device_index]['id']
         debug_print(f"Using device ID: {device_id}")
@@ -225,12 +243,18 @@ def post_sensor(sensor_id, state, attributes):
             "state": state,
             "attributes": attributes
         }
-        response = requests.post(url, headers=HEADERS, data=json.dumps(payload))
+        headers = get_teison_headers()
+        response = requests.post(url, headers=headers, data=json.dumps(payload))
         debug_print(f"Updated {sensor_id}: {response.status_code} - {response.text}")
     except Exception as e:
         debug_print(f"Error updating {sensor_id}: {e}")
 
 def mqtt_publish_status():
+    getCpConfig = None
+    getRates = None
+    slow_poll_counter = 0
+    SLOW_POLL_EVERY = 12  # refresh every 12 cycles (e.g. every 2 min at 10s interval)
+
     while True:
         if token and device_id:
             try:
@@ -265,13 +289,16 @@ def mqtt_publish_status():
                 power = status.get("bizData", {}).get("power")  # power in w
                 debug_print("accEnergy:", power)
 
+                # Only refresh config/rates occasionally
+                if getCpConfig is None or slow_poll_counter >= SLOW_POLL_EVERY:
+                    getCpConfig = get_cp_config(token, app_option, device_id)
+                    getRates = get_rates(token, app_option)
+                    slow_poll_counter = 0
 
-                getCpConfig = get_cp_config(token,app_option,device_id)
+                slow_poll_counter += 1
+
                 maxCurrent = getCpConfig.get("bizData", {}).get("maxCurrent")
                 householdCurrent = getCpConfig.get("bizData", {}).get("directlyScheduleConstraintInfo")
-
-
-                getRates = get_rates(token, app_option)
                 rates = getRates.get("bizData", {}).get("rates")
                 currency = getRates.get("bizData", {}).get("currency")
 
@@ -427,8 +454,6 @@ def get_device_status(status: int) -> str:
     }
 
     return status_map.get(status, "")
-
-login_and_get_device()
 
 client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 client.enable_logger()
@@ -622,4 +647,10 @@ def flask_export_excel(local_device_id):
     from_date = request.args.get('from')
     to_date = request.args.get('to')
     return export_excel(local_token,local_app_option,local_device_id,from_date,to_date)
-app.run(host='0.0.0.0', port=5000)
+
+# Move this OUTSIDE of any loops
+if __name__ == "__main__":
+    login_and_get_device()  # Call once at startup
+
+    # Start threads...
+    app.run(host='0.0.0.0', port=5000)

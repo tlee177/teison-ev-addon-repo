@@ -41,9 +41,9 @@ export class AuthInterceptor implements HttpInterceptor {
         tap(event => {
           if (event instanceof HttpResponse) {
             const body = event.body;
-            if (body?.code === 200 || body?.rtnCode === 200) {
+            if (body?.code === 200 || body?.rtnCode === 200 || body?.rtnCode === undefined || body?.code == undefined) {
             } else {
-              console.warn('resCode not 200, redirecting to login...');
+              console.warn('resCode not 200, redirecting to login...'  + body?.rtnCode );
               this.router.navigate(['/login']);
             }
           }

@@ -217,24 +217,61 @@ def export_excel(local_token, local_app_option, local_device_id, from_date, to_d
     else:
         return {"error": "Failed to fetch file"}, 500
 
+
 def login_and_get_device():
     global token, device_id
-    if(app_option == "MyTeison"):
-        login_data = post_login(username, password, app_option)
-        token = login_data['data']['token']
-    else:
-        login_data = post_login_teison_me(username, password, app_option)
-        token = login_data['token']
+    debug_print(f"🔄 Attempting login for user: {username} via {app_option}...")
 
-    device_list_data = get_device_list(token, app_option).get('bizData', {})
-    if not device_list_data or 'deviceList' not in device_list_data:
-        debug_print("Device list failed - retrying in 30s...")
-        time.sleep(30)
-        return
-    device_list = device_list_data['deviceList']
-    if len(device_list) > device_index:
-        device_id = device_list[device_index]['id']
-        debug_print(f"Using device ID: {device_id}")
+    try:
+        # 1. Perform Login based on selected App Option
+        if app_option == "MyTeison":
+            login_data = post_login(username, password, app_option)
+            # MyTeison nesting: data -> token
+            if login_data.get('code') == 200 and 'data' in login_data:
+                token = login_data['data'].get('token')
+            else:
+                debug_print(f"❌ MyTeison login failed: {login_data.get('message', 'Unknown Error')}")
+                token = None
+        else:
+            # Teison.me / M3 nesting: direct token in root
+            login_data = post_login_teison_me(username, password, app_option)
+            if login_data.get('code') == 200 or 'token' in login_data:
+                token = login_data.get('token')
+            else:
+                debug_print(f"❌ Teison.me login failed: {login_data.get('message', 'Unknown Error')}")
+                token = None
+
+        # 2. Stop if no token was retrieved
+        if not token:
+            debug_print("🚫 No token acquired. verify credentials or appOption.")
+            return
+
+        debug_print("✅ Login successful. Fetching device list...")
+
+        # 3. Fetch Device List
+        device_response = get_device_list(token, app_option)
+        device_list_data = device_response.get('bizData', {})
+
+        if not device_list_data or 'deviceList' not in device_list_data:
+            debug_print(f"⚠️ Device list empty or failed. Response: {device_response.get('message', 'No message')}")
+            # We keep the token, but we can't set a device_id yet
+            device_id = None
+            return
+
+        device_list = device_list_data['deviceList']
+
+        # 4. Select Device by Index
+        if len(device_list) > device_index:
+            device_id = device_list[device_index].get('id')
+            debug_print(f"📱 Using Device: {device_list[device_index].get('chargePointId')} (ID: {device_id})")
+        else:
+            debug_print(f"❌ Device index {device_index} out of range. Found {len(device_list)} devices.")
+            device_id = None
+
+    except Exception as e:
+        debug_print(f"💥 Critical error during login/device fetch: {e}")
+        token = None
+        device_id = None
 
 def post_sensor(sensor_id, state, attributes):
     try:
@@ -249,140 +286,143 @@ def post_sensor(sensor_id, state, attributes):
     except Exception as e:
         debug_print(f"Error updating {sensor_id}: {e}")
 
+
 def mqtt_publish_status():
+    global token, device_id
     getCpConfig = None
     getRates = None
     slow_poll_counter = 0
-    SLOW_POLL_EVERY = 12  # refresh every 12 cycles (e.g. every 2 min at 10s interval)
+    SLOW_POLL_EVERY = 12  # Refresh config/rates every 12 cycles (~2 mins at 10s interval)
 
     while True:
-        if token and device_id:
+        # 1. AUTHENTICATION CHECK: Ensure we have a session before doing anything
+        if not token or not device_id:
+            debug_print("🔑 Authentication missing. Attempting login...")
             try:
-                status = get_device_details(token, app_option, device_id)
-                voltage = status.get("bizData", {}).get("voltage")
-                debug_print("Voltage:", voltage)
-                voltage2 = status.get("bizData", {}).get("voltage2")
-                debug_print("Voltage2:", voltage2)
-                voltage3 = status.get("bizData", {}).get("voltage3")
-                debug_print("Voltage3:", voltage3)
+                login_and_get_device()
+                if not token:
+                    debug_print("❌ Login failed. Retrying next cycle.")
+                    time.sleep(30)
+                    continue
+            except Exception as e:
+                debug_print(f"❌ Login Error: {e}")
+                time.sleep(30)
+                continue
 
-                current = status.get("bizData", {}).get("current")
-                debug_print("Current:", current)
-                current2 = status.get("bizData", {}).get("current2")
-                debug_print("Current2:", current2)
-                current3 = status.get("bizData", {}).get("current3")
-                debug_print("Current3:", current3)
+        try:
+            # 2. FETCH STATUS
+            status = get_device_details(token, app_option, device_id)
 
-                connStatus = status.get("bizData", {}).get("connStatus")
-                debug_print("connStatus:", connStatus)
+            # 3. TOKEN VALIDATION: Check if the session is still valid
+            # Teison API usually returns a 'code' or a specific message on 401/403
+            if status.get("code") in [401, 403] or status.get("message") == "token invalid":
+                debug_print("⚠️ Token expired or invalid. Resetting for re-login...")
+                token = None
+                continue
 
-                energy = status.get("bizData", {}).get("energy")
-                debug_print("energy:", energy)
+            biz_data = status.get("bizData", {})
+            if not biz_data:
+                debug_print("⚠️ Received empty bizData. Skipping this cycle.")
+                time.sleep(pull_interval)
+                continue
 
-                temperature = status.get("bizData", {}).get("temperature")
-                debug_print("temperature:", temperature)
+            # 4. DATA EXTRACTION
+            voltage = biz_data.get("voltage")
+            voltage2 = biz_data.get("voltage2")
+            voltage3 = biz_data.get("voltage3")
+            current = biz_data.get("current")
+            current2 = biz_data.get("current2")
+            current3 = biz_data.get("current3")
+            connStatus = biz_data.get("connStatus")
+            energy = biz_data.get("energy")
+            temperature = biz_data.get("temperature")
+            spendTime = biz_data.get("spendTime")
+            accEnergy = biz_data.get("accEnergy")
+            power = biz_data.get("power")
 
-                spendTime = status.get("bizData", {}).get("spendTime") #convert milisecond to HH:MM:ss
-                debug_print("spendTime:", spendTime)
-                accEnergy = status.get("bizData", {}).get("accEnergy") #energy in kWh
-                debug_print("accEnergy:", accEnergy)
-                power = status.get("bizData", {}).get("power")  # power in w
-                debug_print("accEnergy:", power)
+            # 5. SLOW POLL LOGIC (Config & Rates)
+            if getCpConfig is None or slow_poll_counter >= SLOW_POLL_EVERY:
+                debug_print("🔄 Refreshing CP Config and Rates...")
+                getCpConfig = get_cp_config(token, app_option, device_id)
+                getRates = get_rates(token, app_option)
+                slow_poll_counter = 0
 
-                # Only refresh config/rates occasionally
-                if getCpConfig is None or slow_poll_counter >= SLOW_POLL_EVERY:
-                    getCpConfig = get_cp_config(token, app_option, device_id)
-                    getRates = get_rates(token, app_option)
-                    slow_poll_counter = 0
+            slow_poll_counter += 1
 
-                slow_poll_counter += 1
+            # Extract config values safely
+            config_data = getCpConfig.get("bizData", {})
+            maxCurrent = config_data.get("maxCurrent")
+            householdCurrent = config_data.get("directlyScheduleConstraintInfo")
 
-                maxCurrent = getCpConfig.get("bizData", {}).get("maxCurrent")
-                householdCurrent = getCpConfig.get("bizData", {}).get("directlyScheduleConstraintInfo")
-                rates = getRates.get("bizData", {}).get("rates")
-                currency = getRates.get("bizData", {}).get("currency")
+            rates_data = getRates.get("bizData", {})
+            rates = rates_data.get("rates")
+            currency = rates_data.get("currency")
 
-                if connStatus == 0:
-                    client.publish("teison/charger/state", "stop")
-                else:
-                    client.publish("teison/charger/state", "start")
+            # 6. MQTT PUBLISH (Binary State)
+            state_payload = "stop" if connStatus == 0 else "start"
+            client.publish("teison/charger/state", state_payload, retain=True)
 
-                # Post each sensor
-                post_sensor("ev_charger_status", get_device_status(connStatus), {
-                    "friendly_name": "EV Charger Status",
-                    "icon": "mdi:ev-station"
-                })
+            # 7. HOME ASSISTANT SENSOR UPDATES
+            # Standard Status
+            post_sensor("ev_charger_status", get_device_status(connStatus), {
+                "friendly_name": "EV Charger Status",
+                "icon": "mdi:ev-station"
+            })
 
-                post_sensor("ev_charger_power", power, {
-                    "unit_of_measurement": "w",
-                    "device_class": "power",
-                    "friendly_name": "EV Charger Power",
-                    "icon": "mdi:flash"
-                })
-                post_sensor("ev_charger_accEnergy", accEnergy, {
-                    "unit_of_measurement": "kWh",
-                    "device_class": "power",
-                    "friendly_name": "EV Charger Energy",
-                    "icon": "mdi:flash"
-                })
+            # Power and Energy
+            post_sensor("ev_charger_power", power, {
+                "unit_of_measurement": "W",
+                "device_class": "power",
+                "state_class": "measurement",
+                "friendly_name": "EV Charger Power"
+            })
+            post_sensor("ev_charger_accEnergy", accEnergy, {
+                "unit_of_measurement": "kWh",
+                "device_class": "energy",
+                "state_class": "total_increasing",
+                "friendly_name": "EV Charger Total Energy"
+            })
 
-                post_sensor("ev_charger_spendTime", ms_to_hms(spendTime), {
-                    "unit_of_measurement": "",
-                    "device_class": "power",
-                    "friendly_name": "EV Charger Duration",
-                    "icon": "mdi:flash"
-                })
-                post_sensor("ev_charger_temperature", temperature, {
-                    "unit_of_measurement": "C",
-                    "device_class": "power",
-                    "friendly_name": "EV Charger Temperature",
-                    "icon": "mdi:temperature-celsius"
-                })
+            # Environment and Time
+            post_sensor("ev_charger_spendTime", ms_to_hms(spendTime), {
+                "friendly_name": "EV Charger Duration",
+                "icon": "mdi:timer-outline"
+            })
+            post_sensor("ev_charger_temperature", temperature, {
+                "unit_of_measurement": "°C",
+                "device_class": "temperature",
+                "friendly_name": "EV Charger Temperature"
+            })
 
-                post_sensor("ev_charger_voltage", voltage, {
-                    "unit_of_measurement": "V",
-                    "device_class": "voltage",
-                    "friendly_name": "EV Charger Voltage",
-                    "icon": "mdi:flash-outline"
-                })
-                post_sensor("ev_charger_voltage2", voltage2, {
-                    "unit_of_measurement": "V",
-                    "device_class": "voltage",
-                    "friendly_name": "EV Charger Voltage2",
-                    "icon": "mdi:flash-outline"
-                })
-                post_sensor("ev_charger_voltage3", voltage3, {
-                    "unit_of_measurement": "V",
-                    "device_class": "voltage",
-                    "friendly_name": "EV Charger Voltage3",
-                    "icon": "mdi:flash-outline"
-                })
+            # Electrical (3-Phase Support)
+            post_sensor("ev_charger_voltage", voltage,
+                        {"unit_of_measurement": "V", "device_class": "voltage", "friendly_name": "L1 Voltage"})
+            post_sensor("ev_charger_voltage2", voltage2,
+                        {"unit_of_measurement": "V", "device_class": "voltage", "friendly_name": "L2 Voltage"})
+            post_sensor("ev_charger_voltage3", voltage3,
+                        {"unit_of_measurement": "V", "device_class": "voltage", "friendly_name": "L3 Voltage"})
 
-                post_sensor("ev_charger_current", current, {
-                    "unit_of_measurement": "A",
-                    "device_class": "current",
-                    "friendly_name": "EV Charger Current",
-                    "icon": "mdi:current-ac"
-                })
-                post_sensor("ev_charger_current2", current2, {
-                    "unit_of_measurement": "A",
-                    "device_class": "current",
-                    "friendly_name": "EV Charger Current2",
-                    "icon": "mdi:current-ac"
-                })
-                post_sensor("ev_charger_current3", current3, {
-                    "unit_of_measurement": "A",
-                    "device_class": "current",
-                    "friendly_name": "EV Charger Current3",
-                    "icon": "mdi:current-ac"
-                })
+            post_sensor("ev_charger_current", current,
+                        {"unit_of_measurement": "A", "device_class": "current", "friendly_name": "L1 Current"})
+            post_sensor("ev_charger_current2", current2,
+                        {"unit_of_measurement": "A", "device_class": "current", "friendly_name": "L2 Current"})
+            post_sensor("ev_charger_current3", current3,
+                        {"unit_of_measurement": "A", "device_class": "current", "friendly_name": "L3 Current"})
+
+            # Configuration States (to keep UI sliders in sync)
+            if maxCurrent is not None:
                 client.publish("teison/charger/current/state", maxCurrent, retain=True)
+            if householdCurrent is not None:
                 client.publish("teison/charger/householdCurrent/state", householdCurrent, retain=True)
+            if rates is not None:
                 client.publish("teison/power_rate/state", rates, retain=True)
+            if currency is not None:
                 client.publish("teison/currency/state", currency, retain=True)
-                # client.publish("teison/evcharger/status", json.dumps(status))
-            except Exception as err:
-                debug_print(f"Error in mqtt_publish_status loop: {err}")
+
+        except Exception as err:
+            debug_print(f"❌ Error in MQTT loop: {err}")
+            # If we get a connection error, we don't clear the token, just wait
+
         time.sleep(pull_interval)
 def ms_to_hms(ms_string):
     if ms_string is not None:
@@ -413,6 +453,12 @@ def on_connect(client, userdata, flags, rc, properties):
 def on_message(client, userdata, msg):
 
     payload = msg.payload.decode()
+    debug_print(f"on_message - {payload}")
+    # Check for token BEFORE processing any commands
+    if not token or not device_id:
+        debug_print("🚫 Command received but token is missing. Ignoring.")
+        return
+
     debug_print(f"on_message - {payload}")
     if token and device_id:
         if msg.topic == "teison/charger/current/set":

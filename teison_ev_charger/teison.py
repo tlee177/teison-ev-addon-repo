@@ -20,6 +20,10 @@ lLg22grOvvuQ76NtwGPeAUklREWJqArQgd4U6RCx0vVCT6gtBOtXUK2NkSJvKjUW
 BhRp6in5VJikMp1+KxyO2vgjIrKMDWzucuoeozBQ89LhhyoB2Sp3jpxKpb83/Pqu
 p0gQXJmL39hJ3O+HlwIDAQAB
 -----END PUBLIC KEY-----"""
+
+last_sent_states = {}
+
+
 def debug_print(*args, **kwargs):
     if debug:
         print(*args, **kwargs)
@@ -177,7 +181,7 @@ def get_rates(local_token, local_app_option, retries=3, retry_delay=2):
                 debug_print("Falling back to empty rates due to repeated failures")
                 return {"bizData": {"rates": None, "currency": None}}
 def set_rates(local_token,local_app_option,rates=None, currency=None):
-    headers = get_teison_headers()
+    headers = get_teison_headers(local_token)
     if rates is not None and currency is not None:
         payload = {
             "rates": rates,
@@ -200,7 +204,7 @@ def set_rates(local_token,local_app_option,rates=None, currency=None):
     )
     return res.json()
 def get_charge_record_list(local_token,local_app_option, local_device_id,from_date, to_date):
-    headers = get_teison_headers()
+    headers = get_teison_headers(local_token)
     charge_record_list_res = requests.get(
         f'{get_base_url(local_app_option)}cpAm2/tran/chargeRecordList/{local_device_id}?from={from_date}&to={to_date}',
         headers=headers
@@ -215,7 +219,7 @@ def stop_charge(local_token, local_app_option, local_device_id):
     r = requests.get(f'{get_base_url(local_app_option)}cpAm2/cp/stopCharge/{local_device_id}', headers=headers)
     return r.json()
 def export_excel(local_token, local_app_option, local_device_id, from_date, to_date):
-    headers = get_teison_headers()
+    headers = get_teison_headers(local_token)
     r = requests.get(f'{get_base_url(local_app_option)}cpAm2/tran/exportExcel/{local_device_id}?from={from_date}&to={to_date}', headers=headers)
     if r.status_code == 200:
         return Response(
@@ -282,6 +286,16 @@ def login_and_get_device():
 
 
 def post_sensor(sensor_id, state, attributes):
+    global last_sent_states
+
+    # 1. Convert state to string for consistent comparison and HA compatibility
+    current_state = str(state)
+
+    # 2. Check if the value has actually changed
+    if last_sent_states.get(sensor_id) == current_state:
+        # If the state is the same, skip the API call to avoid "API spam"
+        debug_print(f"Info: state not changed {sensor_id}")
+        return
     try:
         # 1. Dynamically get the token every time to ensure it's never empty
         # In HA Add-ons, the SUPERVISOR_TOKEN is the only one that works with the 'supervisor' URL
@@ -497,11 +511,37 @@ def on_message(client, userdata, msg):
         if msg.topic == "teison/charger/current/set":
             value = int(msg.payload.decode())
             debug_print(f"New current limit: {value}A")
-            set_cp_config(token, app_option, device_id, "VendorMaxWorkCurrent",value)
+            result = set_cp_config(token, app_option, device_id, "VendorMaxWorkCurrent",value)
+            # 1. Send to Teison Cloud
+            # 2. Check if Teison accepted it (Success is usually code 200 or status 'ok')
+            if result.get("code") == 200 or result.get("success"):
+                debug_print(f"✅ Teison Cloud Updated: {value}A")
+
+                # 3. FORCE Home Assistant to update the sensor IMMEDIATELY
+                # We bypass the cache here because we know the value changed
+                post_sensor("ev_charger_current_limit", value, {"unit_of_measurement": "A"})
+
+                # 4. Clear the cache so the next polling loop doesn't get confused
+                last_sent_states["ev_charger_current_limit"] = str(value)
+            else:
+                debug_print(f"⚠️ Teison rejected command: {result}")
         elif msg.topic == "teison/charger/householdCurrent/set":
             value = int(msg.payload.decode())
             debug_print(f"New household current limit: {value}A")
-            set_cp_config(token, app_option, device_id, "DirectlyScheduleConstraintInfo", value)
+            result = set_cp_config(token, app_option, device_id, "DirectlyScheduleConstraintInfo", value)
+            # 1. Send to Teison Cloud
+            # 2. Check if Teison accepted it (Success is usually code 200 or status 'ok')
+            if result.get("code") == 200 or result.get("success"):
+                debug_print(f"✅ Teison Cloud Updated: {value}A")
+
+                # 3. FORCE Home Assistant to update the sensor IMMEDIATELY
+                # We bypass the cache here because we know the value changed
+                post_sensor("ev_charger_household_limit", value, {"unit_of_measurement": "A"})
+
+                # 4. Clear the cache so the next polling loop doesn't get confused
+                last_sent_states["ev_charger_household_limit"] = str(value)
+            else:
+                debug_print(f"⚠️ Teison rejected command: {result}")
         elif msg.topic == "teison/power_rate/set":
             value = float(msg.payload.decode())
             debug_print(f"New power rate: {value}kwh")

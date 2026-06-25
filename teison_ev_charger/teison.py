@@ -230,7 +230,7 @@ def export_excel(local_token, local_app_option, local_device_id, from_date, to_d
 
 def login_and_get_device():
     global token, device_id
-    debug_print(f"🔄 Attempting login for user: {username} via {app_option}...")
+    debug_print(f"🔄 Attempting login for user TJL: {username} via {app_option}...")
 
     try:
         # 1. Perform Login based on selected App Option
@@ -267,7 +267,7 @@ def login_and_get_device():
             # We keep the token, but we can't set a device_id yet
             device_id = None
             return
-
+        debug_print(f"TJL {device_list_data}")
         device_list = device_list_data['deviceList']
 
         # 4. Select Device by Index

@@ -236,6 +236,7 @@ def login_and_get_device():
     try:
         # 1. Perform Login based on selected App Option
         if app_option == "MyTeison":
+            debug_print(f"🔄 TJL3 {app_option}")
             login_data = post_login(username, password, app_option)
             # MyTeison nesting: data -> token
             if login_data.get('code') == 200 and 'data' in login_data:

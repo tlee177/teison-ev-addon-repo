@@ -11,7 +11,7 @@ from base64 import b64encode
 from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_v1_5
 from requests.exceptions import RequestException, SSLError
-
+from datetime import datetime
 
 # Public key for password encryption
 public_key_pem = """-----BEGIN PUBLIC KEY-----
@@ -26,7 +26,8 @@ last_sent_states = {}
 
 def debug_print(*args, **kwargs):
     if debug:
-        print(*args, **kwargs)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"[{timestamp}]", *args, **kwargs)
 def encrypt_password(password):
     rsa_key = RSA.import_key(public_key_pem)
     cipher = PKCS1_v1_5.new(rsa_key)
@@ -230,7 +231,7 @@ def export_excel(local_token, local_app_option, local_device_id, from_date, to_d
 
 def login_and_get_device():
     global token, device_id
-    debug_print(f"🔄 Attempting login for user TJL: {username} via {app_option}...")
+    debug_print(f"🔄 Attempting login for user TJL1: {username} via {app_option}...")
 
     try:
         # 1. Perform Login based on selected App Option
@@ -239,17 +240,9 @@ def login_and_get_device():
             # MyTeison nesting: data -> token
             if login_data.get('code') == 200 and 'data' in login_data:
                 token = login_data['data'].get('token')
-                debug_print(f"TJL got token {token}")
+                debug_print(f"TJL got token")
             else:
                 debug_print(f"❌ MyTeison login failed: {login_data.get('message', 'Unknown Error')}")
-                token = None
-        else:
-            # Teison.me / M3 nesting: direct token in root
-            login_data = post_login_teison_me(username, password, app_option)
-            if login_data.get('code') == 200 or 'token' in login_data:
-                token = login_data.get('token')
-            else:
-                debug_print(f"❌ Teison.me login failed: {login_data.get('message', 'Unknown Error')}")
                 token = None
 
         # 2. Stop if no token was retrieved

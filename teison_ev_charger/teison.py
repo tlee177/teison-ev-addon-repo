@@ -108,7 +108,7 @@ def post_login(user_name, pass_word, local_app_option):
     )
     return login_res.json()
 def get_device_list(local_token, local_app_option):
-    headers = {'User-Agent': 'PostmanRuntime/7.53.0','token': local_token}
+    headers = {'User-Agent': 'PostmanRuntime/7.54.0','token': local_token}
     device_res = requests.get(
         f'{get_base_url(local_app_option)}cpAm2/cp/deviceList',
         headers=headers
@@ -166,8 +166,9 @@ def login_and_get_device():
     else:
         login_data = post_login_teison_me(username, password, app_option)
         token = login_data['token']
-
+    debug_print(f"TJL3 Logged in!")
     device_list = get_device_list(token,app_option).get('bizData', [])
+    debug_print(f"{device_list}")
     device_list = device_list['deviceList']
     if len(device_list) > device_index:
         device_id = device_list[device_index]['id']

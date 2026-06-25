@@ -11,8 +11,6 @@ from base64 import b64encode
 from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_v1_5
 from requests.exceptions import RequestException, SSLError
-# Config
-HA_BASE_URL = "http://homeassistant.local:8123/api/states/"
 
 
 # Public key for password encryption
@@ -22,6 +20,10 @@ lLg22grOvvuQ76NtwGPeAUklREWJqArQgd4U6RCx0vVCT6gtBOtXUK2NkSJvKjUW
 BhRp6in5VJikMp1+KxyO2vgjIrKMDWzucuoeozBQ89LhhyoB2Sp3jpxKpb83/Pqu
 p0gQXJmL39hJ3O+HlwIDAQAB
 -----END PUBLIC KEY-----"""
+
+last_sent_states = {}
+
+
 def debug_print(*args, **kwargs):
     if debug:
         print(*args, **kwargs)
@@ -31,6 +33,23 @@ def encrypt_password(password):
     encrypted = cipher.encrypt(password.encode('utf-8'))
     return b64encode(encrypted).decode('utf-8')
 
+
+# --- Header Helper (The 403 Fix) ---
+def get_teison_headers(local_token=None):
+    """Returns headers mimicking a real browser to bypass 403 blocks."""
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Origin': 'https://cloud.teison.com',
+        'Referer': 'https://cloud.teison.com/'
+    }
+    if local_token:
+        headers['token'] = local_token
+    return headers
+
+
+# --- Load Options ---
 config_path = './data/options.json'
 try:
     with open(config_path) as f:
@@ -86,232 +105,370 @@ else:
     debug_print(f"File not found: {config_path}")
 
 
+# Updated for Home Assistant Add-on Environment
+if is_hassio():
+    HA_BASE_URL = "http://supervisor/core/api/states/"
+    # The supervisor provides this token automatically to the container
+    HA_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
+else:
+    HA_BASE_URL = "http://homeassistant.local:8123/api/states/"
+    HA_TOKEN = config.get('access_token')
+
 HEADERS = {
     "Authorization": f"Bearer {HA_TOKEN}",
     "Content-Type": "application/json"
 }
 DEFAULT_EMPTY_RATES = {"bizData": {"rates": None, "currency": None}}
 def post_login_teison_me(user_name, pass_word, app_option):
+    headers = get_teison_headers()
     payload = {'language': 'en_US',
                'username': user_name,
                'password': pass_word}
     login_res = requests.post(
         f'{get_base_url(app_option)}cpAm2/login',
-        data=payload
+        data=payload,
+        headers=headers
     )
     return login_res.json()
 def post_login(user_name, pass_word, local_app_option):
+    headers = get_teison_headers()
     encrypted_password = encrypt_password(pass_word)
     login_res = requests.post(
         f'{get_base_url(local_app_option)}api/v1/login/login',
-        json={"username": user_name, "password": encrypted_password}
+        json={"username": user_name, "password": encrypted_password},
+        headers=headers
     )
     return login_res.json()
 def get_device_list(local_token, local_app_option):
-    headers = {'User-Agent': 'PostmanRuntime/7.54.0','token': local_token}
-    device_res = requests.get(
-        f'{get_base_url(local_app_option)}cpAm2/cp/deviceList',
-        headers=headers
-    )
+    headers = get_teison_headers(local_token)
+    device_res = requests.get(f'{get_base_url(local_app_option)}cpAm2/cp/deviceList', headers=headers)
     return device_res.json()
+
+
 def get_device_details(local_token, local_app_option, local_device_id):
-    headers = {'token': local_token}
-    res = requests.get(
-        f'{get_base_url(local_app_option)}cpAm2/cp/deviceDetail/{local_device_id}',
-        headers=headers
-    )
+    headers = get_teison_headers(local_token)
+    res = requests.get(f'{get_base_url(local_app_option)}cpAm2/cp/deviceDetail/{local_device_id}', headers=headers)
     return res.json()
-def get_cp_config(local_token,local_app_option, local_device_id):
-    headers = {'token': local_token}
-    res = requests.get(
-        f'{get_base_url(local_app_option)}cpAm2/cp/getCpConfig/{local_device_id}',
-        headers=headers
-    )
+
+
+def get_cp_config(local_token, local_app_option, local_device_id):
+    headers = get_teison_headers(local_token)
+    res = requests.get(f'{get_base_url(local_app_option)}cpAm2/cp/getCpConfig/{local_device_id}', headers=headers)
     return res.json()
-def set_cp_config(local_token,local_app_option, local_device_id,key,value):
-    headers = {'User-Agent': 'PostmanRuntime/7.53.0','token': local_token}
-    payload = {
-        "key": key,
-        "value": value,
-    }
+
+
+def set_cp_config(local_token, local_app_option, local_device_id, key, value):
+    headers = get_teison_headers(local_token)
+    payload = {"key": key, "value": value}
+    res = requests.post(f'{get_base_url(local_app_option)}cpAm2/cp/changeCpConfig/{local_device_id}', json=payload,
+                        headers=headers)
+    return res.json()
+
+
+def get_rates(local_token, local_app_option, retries=3, retry_delay=2):
+    headers = get_teison_headers(local_token)
+    url = f'{get_base_url(local_app_option)}cpAm2/users/getRates'
+    for attempt in range(1, retries + 1):
+        try:
+            res = requests.get(url, headers=headers, timeout=10)
+            res.raise_for_status()
+            return res.json()
+        except (SSLError, RequestException) as err:
+            debug_print(f"Error fetching rates (attempt {attempt}/{retries}): {err}")
+            if attempt < retries:
+                time.sleep(retry_delay)
+            else:
+                debug_print("Falling back to empty rates due to repeated failures")
+                return {"bizData": {"rates": None, "currency": None}}
+def set_rates(local_token,local_app_option,rates=None, currency=None):
+    headers = get_teison_headers(local_token)
+    if rates is not None and currency is not None:
+        payload = {
+            "rates": rates,
+            "currency": currency
+        }
+    elif rates is not None:
+        payload = {
+            "rates": rates
+        }
+    elif currency is not None:
+        payload = {
+            "currency": currency
+        }
+    else:
+        payload = {}
     res = requests.post(
-        f'{get_base_url(local_app_option)}cpAm2/cp/changeCpConfig/{local_device_id}',
+        f'{get_base_url(local_app_option)}cpAm2/users/setRates',
         json=payload,
         headers=headers
     )
     return res.json()
-
-
 def get_charge_record_list(local_token,local_app_option, local_device_id,from_date, to_date):
-    headers = {'User-Agent': 'PostmanRuntime/7.53.0','token': local_token}
+    headers = get_teison_headers(local_token)
     charge_record_list_res = requests.get(
         f'{get_base_url(local_app_option)}cpAm2/tran/chargeRecordList/{local_device_id}?from={from_date}&to={to_date}',
         headers=headers
     )
     return charge_record_list_res.json()
 def start_charge(local_token, local_app_option, local_device_id):
-    headers = {'User-Agent': 'PostmanRuntime/7.53.0','token': local_token}
+    headers = get_teison_headers(local_token)
     r = requests.post(f'{get_base_url(local_app_option)}cpAm2/cp/startCharge/{local_device_id}', headers=headers)
     return r.json()
 def stop_charge(local_token, local_app_option, local_device_id):
-    headers = {'User-Agent': 'PostmanRuntime/7.53.0','token': local_token}
+    headers = get_teison_headers(local_token)
     r = requests.get(f'{get_base_url(local_app_option)}cpAm2/cp/stopCharge/{local_device_id}', headers=headers)
     return r.json()
+def export_excel(local_token, local_app_option, local_device_id, from_date, to_date):
+    headers = get_teison_headers(local_token)
+    r = requests.get(f'{get_base_url(local_app_option)}cpAm2/tran/exportExcel/{local_device_id}?from={from_date}&to={to_date}', headers=headers)
+    if r.status_code == 200:
+        return Response(
+            r.content
+        )
+    else:
+        return {"error": "Failed to fetch file"}, 500
 
 def login_and_get_device():
     global token, device_id
-    if(app_option == "MyTeison"):
-        login_data = post_login(username, password, app_option)
-        token = login_data['data']['token']
-    else:
-        login_data = post_login_teison_me(username, password, app_option)
-        token = login_data['token']
-    debug_print(f"TJL3 Logged in!")
-    device_list = get_device_list(token,app_option).get('bizData', [])
-    debug_print(f"{device_list}")
-    device_list = device_list['deviceList']
-    if len(device_list) > device_index:
-        device_id = device_list[device_index]['id']
-        debug_print(f"TJL3 Using device ID: {device_id}")
+    debug_print(f"🔄 Attempting login for user: {username} via {app_option}...")
+
+    try:
+        # 1. Perform Login based on selected App Option
+        if app_option == "MyTeison":
+            login_data = post_login(username, password, app_option)
+            # MyTeison nesting: data -> token
+            if login_data.get('code') == 200 and 'data' in login_data:
+                token = login_data['data'].get('token')
+            else:
+                debug_print(f"❌ MyTeison login failed: {login_data.get('message', 'Unknown Error')}")
+                token = None
+        else:
+            # Teison.me / M3 nesting: direct token in root
+            login_data = post_login_teison_me(username, password, app_option)
+            if login_data.get('code') == 200 or 'token' in login_data:
+                token = login_data.get('token')
+            else:
+                debug_print(f"❌ Teison.me login failed: {login_data.get('message', 'Unknown Error')}")
+                token = None
+
+        # 2. Stop if no token was retrieved
+        if not token:
+            debug_print("🚫 No token acquired. verify credentials or appOption.")
+            return
+
+        debug_print("✅ Login successful. Fetching device list...")
+
+        # 3. Fetch Device List
+        device_response = get_device_list(token, app_option)
+        device_list_data = device_response.get('bizData', {})
+
+        if not device_list_data or 'deviceList' not in device_list_data:
+            debug_print(f"⚠️ Device list empty or failed. Response: {device_response.get('message', 'No message')}")
+            # We keep the token, but we can't set a device_id yet
+            device_id = None
+            return
+
+        device_list = device_list_data['deviceList']
+
+        # 4. Select Device by Index
+        if len(device_list) > device_index:
+            device_id = device_list[device_index].get('id')
+            debug_print(f"📱 Using Device: {device_list[device_index].get('chargePointId')} (ID: {device_id})")
+        else:
+            debug_print(f"❌ Device index {device_index} out of range. Found {len(device_list)} devices.")
+            device_id = None
+
+    except Exception as e:
+        debug_print(f"💥 Critical error during login/device fetch: {e}")
+        token = None
+        device_id = None
+
 
 def post_sensor(sensor_id, state, attributes):
+    global last_sent_states
+
+    # 1. Convert state to string for consistent comparison and HA compatibility
+    current_state = str(state)
+
+    # 2. Check if the value has actually changed
+    if last_sent_states.get(sensor_id) == current_state:
+        # If the state is the same, skip the API call to avoid "API spam"
+        debug_print(f"Info: state not changed {sensor_id}")
+        return
     try:
-        url = f"{HA_BASE_URL}sensor.{sensor_id}"
+        # 1. Dynamically get the token every time to ensure it's never empty
+        # In HA Add-ons, the SUPERVISOR_TOKEN is the only one that works with the 'supervisor' URL
+        token = os.environ.get("SUPERVISOR_TOKEN") or config.get('access_token')
+
+        if not token:
+            debug_print(f"❌ Error: No token found for {sensor_id}")
+            return
+
+        # 2. Match the URL to the token type
+        if os.environ.get("SUPERVISOR_TOKEN"):
+            url = f"http://supervisor/core/api/states/sensor.{sensor_id}"
+        else:
+            url = f"{HA_BASE_URL}sensor.{sensor_id}"
+
+        # 3. Construct headers on-the-fly
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+
         payload = {
             "state": state,
             "attributes": attributes
         }
-        response = requests.post(url, headers=HEADERS, data=json.dumps(payload))
-        debug_print(f"Updated {sensor_id}: {response.status_code} - {response.text}")
+
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+
+        if response.status_code == 200:
+            debug_print(f"✅ Updated {sensor_id}")
+        else:
+            # This will show us EXACTLY what the supervisor is complaining about
+            debug_print(f"❌ {sensor_id} Error: {response.status_code} - {response.text}")
+
     except Exception as e:
-        debug_print(f"Error updating {sensor_id}: {e}")
+        debug_print(f"💥 Critical Error updating {sensor_id}: {e}")
+
 
 def mqtt_publish_status():
+    global token, device_id
+    getCpConfig = None
+    getRates = None
+    slow_poll_counter = 0
+    SLOW_POLL_EVERY = 12  # Refresh config/rates every 12 cycles (~2 mins at 10s interval)
+
     while True:
-        if token and device_id:
+        # 1. AUTHENTICATION CHECK: Ensure we have a session before doing anything
+        if not token or not device_id:
+            debug_print("🔑 Authentication missing. Attempting login...")
             try:
-                status = get_device_details(token, app_option, device_id)
-                voltage = status.get("bizData", {}).get("voltage")
-                debug_print("Voltage:", voltage)
-                voltage2 = status.get("bizData", {}).get("voltage2")
-                debug_print("Voltage2:", voltage2)
-                voltage3 = status.get("bizData", {}).get("voltage3")
-                debug_print("Voltage3:", voltage3)
+                login_and_get_device()
+                if not token:
+                    debug_print("❌ Login failed. Retrying next cycle.")
+                    time.sleep(30)
+                    continue
+            except Exception as e:
+                debug_print(f"❌ Login Error: {e}")
+                time.sleep(30)
+                continue
 
-                current = status.get("bizData", {}).get("current")
-                debug_print("Current:", current)
-                current2 = status.get("bizData", {}).get("current2")
-                debug_print("Current2:", current2)
-                current3 = status.get("bizData", {}).get("current3")
-                debug_print("Current3:", current3)
+        try:
+            # 2. FETCH STATUS
+            status = get_device_details(token, app_option, device_id)
 
-                connStatus = status.get("bizData", {}).get("connStatus")
-                debug_print("connStatus:", connStatus)
+            # 3. TOKEN VALIDATION: Check if the session is still valid
+            # Teison API usually returns a 'code' or a specific message on 401/403
+            if status.get("code") in [401, 403] or status.get("message") == "token invalid":
+                debug_print("⚠️ Token expired or invalid. Resetting for re-login...")
+                token = None
+                continue
 
-                energy = status.get("bizData", {}).get("energy")
-                debug_print("energy:", energy)
+            biz_data = status.get("bizData", {})
+            if not biz_data:
+                debug_print("⚠️ Received empty bizData. Skipping this cycle.")
+                time.sleep(pull_interval)
+                continue
 
-                temperature = status.get("bizData", {}).get("temperature")
-                debug_print("temperature:", temperature)
+            # 4. DATA EXTRACTION
+            voltage = biz_data.get("voltage")
+            voltage2 = biz_data.get("voltage2")
+            voltage3 = biz_data.get("voltage3")
+            current = biz_data.get("current")
+            current2 = biz_data.get("current2")
+            current3 = biz_data.get("current3")
+            connStatus = biz_data.get("connStatus")
+            energy = biz_data.get("energy")
+            temperature = biz_data.get("temperature")
+            spendTime = biz_data.get("spendTime")
+            accEnergy = biz_data.get("accEnergy")
+            power = biz_data.get("power")
 
-                spendTime = status.get("bizData", {}).get("spendTime") #convert milisecond to HH:MM:ss
-                debug_print("spendTime:", spendTime)
-                accEnergy = status.get("bizData", {}).get("accEnergy") #energy in kWh
-                debug_print("accEnergy:", accEnergy)
-                power = status.get("bizData", {}).get("power")  # power in w
-                debug_print("accEnergy:", power)
-
-
-                getCpConfig = get_cp_config(token,app_option,device_id)
-                maxCurrent = getCpConfig.get("bizData", {}).get("maxCurrent")
-                householdCurrent = getCpConfig.get("bizData", {}).get("directlyScheduleConstraintInfo")
-
-
+            # 5. SLOW POLL LOGIC (Config & Rates)
+            if getCpConfig is None or slow_poll_counter >= SLOW_POLL_EVERY:
+                debug_print("🔄 Refreshing CP Config and Rates...")
+                getCpConfig = get_cp_config(token, app_option, device_id)
                 getRates = get_rates(token, app_option)
-                rates = getRates.get("bizData", {}).get("rates")
-                currency = getRates.get("bizData", {}).get("currency")
+                slow_poll_counter = 0
 
-                if connStatus == 0:
-                    client.publish("teison/charger/state", "stop")
-                else:
-                    client.publish("teison/charger/state", "start")
+            slow_poll_counter += 1
 
-                # Post each sensor
-                post_sensor("ev_charger_status", get_device_status(connStatus), {
-                    "friendly_name": "EV Charger Status",
-                    "icon": "mdi:ev-station"
-                })
+            # Extract config values safely
+            config_data = getCpConfig.get("bizData", {})
+            maxCurrent = config_data.get("maxCurrent")
+            householdCurrent = config_data.get("directlyScheduleConstraintInfo")
 
-                post_sensor("ev_charger_power", power, {
-                    "unit_of_measurement": "w",
-                    "device_class": "power",
-                    "friendly_name": "EV Charger Power",
-                    "icon": "mdi:flash"
-                })
-                post_sensor("ev_charger_accEnergy", accEnergy, {
-                    "unit_of_measurement": "kWh",
-                    "device_class": "power",
-                    "friendly_name": "EV Charger Energy",
-                    "icon": "mdi:flash"
-                })
+            rates_data = getRates.get("bizData", {})
+            rates = rates_data.get("rates")
+            currency = rates_data.get("currency")
 
-                post_sensor("ev_charger_spendTime", ms_to_hms(spendTime), {
-                    "unit_of_measurement": "",
-                    "device_class": "power",
-                    "friendly_name": "EV Charger Duration",
-                    "icon": "mdi:flash"
-                })
-                post_sensor("ev_charger_temperature", temperature, {
-                    "unit_of_measurement": "C",
-                    "device_class": "power",
-                    "friendly_name": "EV Charger Temperature",
-                    "icon": "mdi:temperature-celsius"
-                })
+            # 6. MQTT PUBLISH (Binary State)
+            state_payload = "stop" if connStatus == 0 else "start"
+            client.publish("teison/charger/state", state_payload, retain=True)
 
-                post_sensor("ev_charger_voltage", voltage, {
-                    "unit_of_measurement": "V",
-                    "device_class": "voltage",
-                    "friendly_name": "EV Charger Voltage",
-                    "icon": "mdi:flash-outline"
-                })
-                post_sensor("ev_charger_voltage2", voltage2, {
-                    "unit_of_measurement": "V",
-                    "device_class": "voltage",
-                    "friendly_name": "EV Charger Voltage2",
-                    "icon": "mdi:flash-outline"
-                })
-                post_sensor("ev_charger_voltage3", voltage3, {
-                    "unit_of_measurement": "V",
-                    "device_class": "voltage",
-                    "friendly_name": "EV Charger Voltage3",
-                    "icon": "mdi:flash-outline"
-                })
+            # 7. HOME ASSISTANT SENSOR UPDATES
+            # Standard Status
+            post_sensor("ev_charger_status", get_device_status(connStatus), {
+                "friendly_name": "EV Charger Status",
+                "icon": "mdi:ev-station"
+            })
 
-                post_sensor("ev_charger_current", current, {
-                    "unit_of_measurement": "A",
-                    "device_class": "current",
-                    "friendly_name": "EV Charger Current",
-                    "icon": "mdi:current-ac"
-                })
-                post_sensor("ev_charger_current2", current2, {
-                    "unit_of_measurement": "A",
-                    "device_class": "current",
-                    "friendly_name": "EV Charger Current2",
-                    "icon": "mdi:current-ac"
-                })
-                post_sensor("ev_charger_current3", current3, {
-                    "unit_of_measurement": "A",
-                    "device_class": "current",
-                    "friendly_name": "EV Charger Current3",
-                    "icon": "mdi:current-ac"
-                })
+            # Power and Energy
+            post_sensor("ev_charger_power", power, {
+                "unit_of_measurement": "W",
+                "device_class": "power",
+                "state_class": "measurement",
+                "friendly_name": "EV Charger Power"
+            })
+            post_sensor("ev_charger_accEnergy", accEnergy, {
+                "unit_of_measurement": "kWh",
+                "device_class": "energy",
+                "state_class": "total_increasing",
+                "friendly_name": "EV Charger Total Energy"
+            })
+
+            # Environment and Time
+            post_sensor("ev_charger_spendTime", ms_to_hms(spendTime), {
+                "friendly_name": "EV Charger Duration",
+                "icon": "mdi:timer-outline"
+            })
+            post_sensor("ev_charger_temperature", temperature, {
+                "unit_of_measurement": "°C",
+                "device_class": "temperature",
+                "friendly_name": "EV Charger Temperature"
+            })
+
+            # Electrical (3-Phase Support)
+            post_sensor("ev_charger_voltage", voltage,
+                        {"unit_of_measurement": "V", "device_class": "voltage", "friendly_name": "L1 Voltage"})
+            post_sensor("ev_charger_voltage2", voltage2,
+                        {"unit_of_measurement": "V", "device_class": "voltage", "friendly_name": "L2 Voltage"})
+            post_sensor("ev_charger_voltage3", voltage3,
+                        {"unit_of_measurement": "V", "device_class": "voltage", "friendly_name": "L3 Voltage"})
+
+            post_sensor("ev_charger_current", current,
+                        {"unit_of_measurement": "A", "device_class": "current", "friendly_name": "L1 Current"})
+            post_sensor("ev_charger_current2", current2,
+                        {"unit_of_measurement": "A", "device_class": "current", "friendly_name": "L2 Current"})
+            post_sensor("ev_charger_current3", current3,
+                        {"unit_of_measurement": "A", "device_class": "current", "friendly_name": "L3 Current"})
+
+            # Configuration States (to keep UI sliders in sync)
+            if maxCurrent is not None:
                 client.publish("teison/charger/current/state", maxCurrent, retain=True)
+            if householdCurrent is not None:
                 client.publish("teison/charger/householdCurrent/state", householdCurrent, retain=True)
+            if rates is not None:
                 client.publish("teison/power_rate/state", rates, retain=True)
+            if currency is not None:
                 client.publish("teison/currency/state", currency, retain=True)
-                # client.publish("teison/evcharger/status", json.dumps(status))
-            except Exception as err:
-                debug_print(f"Error in mqtt_publish_status loop: {err}")
+
+        except Exception as err:
+            debug_print(f"❌ Error in MQTT loop: {err}")
+            # If we get a connection error, we don't clear the token, just wait
+
         time.sleep(pull_interval)
 def ms_to_hms(ms_string):
     if ms_string is not None:
@@ -342,17 +499,48 @@ def on_connect(client, userdata, flags, rc, properties):
 def on_message(client, userdata, msg):
 
     payload = msg.payload.decode()
-    print(f"TJL4 {payload}")
+    debug_print(f"on_message - {payload}")
+    # Check for token BEFORE processing any commands
+    if not token or not device_id:
+        debug_print("🚫 Command received but token is missing. Ignoring.")
+        return
+
     debug_print(f"on_message - {payload}")
     if token and device_id:
         if msg.topic == "teison/charger/current/set":
             value = int(msg.payload.decode())
             debug_print(f"New current limit: {value}A")
-            set_cp_config(token, app_option, device_id, "VendorMaxWorkCurrent",value)
+            result = set_cp_config(token, app_option, device_id, "VendorMaxWorkCurrent",value)
+            # 1. Send to Teison Cloud
+            # 2. Check if Teison accepted it (Success is usually code 200 or status 'ok')
+            if result.get("code") == 200 or result.get("success"):
+                debug_print(f"✅ Teison Cloud Updated: {value}A")
+
+                # 3. FORCE Home Assistant to update the sensor IMMEDIATELY
+                # We bypass the cache here because we know the value changed
+                post_sensor("ev_charger_current_limit", value, {"unit_of_measurement": "A"})
+
+                # 4. Clear the cache so the next polling loop doesn't get confused
+                last_sent_states["ev_charger_current_limit"] = str(value)
+            else:
+                debug_print(f"⚠️ Teison rejected command: {result}")
         elif msg.topic == "teison/charger/householdCurrent/set":
             value = int(msg.payload.decode())
             debug_print(f"New household current limit: {value}A")
-            set_cp_config(token, app_option, device_id, "DirectlyScheduleConstraintInfo", value)
+            result = set_cp_config(token, app_option, device_id, "DirectlyScheduleConstraintInfo", value)
+            # 1. Send to Teison Cloud
+            # 2. Check if Teison accepted it (Success is usually code 200 or status 'ok')
+            if result.get("code") == 200 or result.get("success"):
+                debug_print(f"✅ Teison Cloud Updated: {value}A")
+
+                # 3. FORCE Home Assistant to update the sensor IMMEDIATELY
+                # We bypass the cache here because we know the value changed
+                post_sensor("ev_charger_household_limit", value, {"unit_of_measurement": "A"})
+
+                # 4. Clear the cache so the next polling loop doesn't get confused
+                last_sent_states["ev_charger_household_limit"] = str(value)
+            else:
+                debug_print(f"⚠️ Teison rejected command: {result}")
         elif msg.topic == "teison/power_rate/set":
             value = float(msg.payload.decode())
             debug_print(f"New power rate: {value}kwh")
@@ -385,8 +573,6 @@ def get_device_status(status: int) -> str:
 
     return status_map.get(status, "")
 
-login_and_get_device()
-
 client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 client.enable_logger()
 client.username_pw_set(mqtt_user, mqtt_pass)
@@ -394,8 +580,13 @@ client.on_connect = on_connect
 client.on_message = on_message
 client.connect(mqtt_host, mqtt_port, 60)
 
-threading.Thread(target=client.loop_forever, daemon=True).start()
-threading.Thread(target=mqtt_publish_status, daemon=True).start()
+# 1. Start the MQTT background networking engine
+# This replaces: threading.Thread(target=client.loop_forever...).start()
+client.loop_start()
+
+# 2. Start your status polling loop in a background thread
+status_thread = threading.Thread(target=mqtt_publish_status, daemon=True)
+status_thread.start()
 
 # Publish discovery config
 client.publish(
@@ -579,4 +770,8 @@ def flask_export_excel(local_device_id):
     from_date = request.args.get('from')
     to_date = request.args.get('to')
     return export_excel(local_token,local_app_option,local_device_id,from_date,to_date)
-app.run(host='0.0.0.0', port=5000)
+
+# Move this OUTSIDE of any loops
+if __name__ == "__main__":
+    # Start threads...
+    app.run(host='0.0.0.0', port=5000)

@@ -325,7 +325,7 @@ def post_sensor(sensor_id, state, attributes):
         response = requests.post(url, headers=headers, json=payload, timeout=10)
 
         if response.status_code == 200:
-            response = response
+            bobjob = None
             #debug_print(f"✅ Updated {sensor_id}")
         else:
             # This will show us EXACTLY what the supervisor is complaining about

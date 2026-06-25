@@ -239,6 +239,7 @@ def login_and_get_device():
             # MyTeison nesting: data -> token
             if login_data.get('code') == 200 and 'data' in login_data:
                 token = login_data['data'].get('token')
+                debug_print(f"TJL got token {token}")
             else:
                 debug_print(f"❌ MyTeison login failed: {login_data.get('message', 'Unknown Error')}")
                 token = None
@@ -324,7 +325,8 @@ def post_sensor(sensor_id, state, attributes):
         response = requests.post(url, headers=headers, json=payload, timeout=10)
 
         if response.status_code == 200:
-            debug_print(f"✅ Updated {sensor_id}")
+            response = response
+            #debug_print(f"✅ Updated {sensor_id}")
         else:
             # This will show us EXACTLY what the supervisor is complaining about
             debug_print(f"❌ {sensor_id} Error: {response.status_code} - {response.text}")
@@ -545,14 +547,12 @@ def on_message(client, userdata, msg):
             value = float(msg.payload.decode())
             debug_print(f"New power rate: {value}kwh")
             set_rates(token, app_option, value, None)
-        elif msg.topic == "teison/currency/set":
-            value = msg.payload.decode()
-            debug_print(f"New currency: {value}")
-            set_rates(token,app_option,None,value)
         elif payload == "start":
+            debug_print(f"TJL posting start for: {device_id}")
             start_charge(token,app_option,device_id)
             client.publish("teison/charger/state", "start")
         elif payload == "stop":
+            debug_print(f"TJL posting stop for: {device_id}")
             stop_charge(token,app_option,device_id)
             client.publish("teison/charger/state", "stop")
 def get_device_status(status: int) -> str:
